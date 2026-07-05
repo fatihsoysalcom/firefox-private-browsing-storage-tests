@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firefox Private Browsing Storage Tests</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; line-height: 1.6; background-color: #f4f4f4; color: #333; }
+        h1, h2 { color: #0056b3; }
+        .container { max-width: 800px; margin: auto; background-color: #fff; padding: 25px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .test-result { padding: 12px; margin-bottom: 12px; border-radius: 6px; font-size: 0.95em; }
+        .pass { background-color: #e6ffe6; border: 1px solid #00cc00; color: #006600; }
+        .fail { background-color: #ffe6e6; border: 1px solid #cc0000; color: #660000; }
+        .info { background-color: #e6f7ff; border: 1px solid #0099cc; color: #004d66; }
+        strong { font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Firefox Private Browsing Storage Behavior</h1>
+        <p>This page demonstrates how different browser storage mechanisms behave in normal vs. private browsing modes. Open this page in both modes to observe the differences, which is crucial for unit testing web applications.</p>
+
+        <h2>Test Results:</h2>
+        <div id="results">
+            <div id="localStorageResult" class="test-result info">Testing Local Storage...</div>
+            <div id="sessionStorageResult" class="test-result info">Testing Session Storage...</div>
+            <div id="indexedDBResult" class="test-result info">Testing IndexedDB...</div>
+            <div id="cookieResult" class="test-result info">Checking Cookie Support...</div>
+        </div>
+    </div>
+
+    <script>
+        function updateResult(elementId, status, message) {
+            const el = document.getElementById(elementId);
+            el.className = `test-result ${status}`;
+            el.innerHTML = `<strong>${elementId.replace('Result', '')}:</strong> ${message}`;
+        }
+
+        async function runTests() {
+            // --- Test Local Storage --- 
+            // In Firefox Private Browsing, localStorage.setItem often throws a SecurityError
+            // or QuotaExceededError, as it's designed not to persist data.
+            try {
+                localStorage.setItem('testKeyLS', 'testValueLS');
+                const value = localStorage.getItem('testKeyLS');
+                if (value === 'testValueLS') {
+                    updateResult('localStorageResult', 'pass', 'Local Storage works as expected. Data persisted.');
+                } else {
+                    updateResult('localStorageResult', 'fail', 'Local Storage failed to retrieve data after setting.');
+                }
+                localStorage.removeItem('testKeyLS'); // Clean up
+            } catch (e) {
+                updateResult('localStorageResult', 'fail', `Local Storage access failed: ${e.name} - ${e.message}. This behavior is common in Private Browsing.`);
+            }
+
+            // --- Test Session Storage ---
+            // Session Storage typically works in Private Browsing but is cleared when the private window/tab is closed.
+            try {
+                sessionStorage.setItem('testKeySS', 'testValueSS');
+                const value = sessionStorage.getItem('testKeySS');
+                if (value === 'testValueSS') {
+                    updateResult('sessionStorageResult', 'pass', 'Session Storage works as expected. Data persists for the current session.');
+                } else {
+                    updateResult('sessionStorageResult', 'fail', 'Session Storage failed to retrieve data after setting.');
+                }
+                sessionStorage.removeItem('testKeySS'); // Clean up
+            } catch (e) {
+                updateResult('sessionStorageResult', 'fail', `Session Storage access failed: ${e.name} - ${e.message}.`);
+            }
+
+            // --- Test IndexedDB ---
+            // IndexedDB can also fail to open or write in Private Browsing, often with SecurityError or QuotaExceededError.
+            const dbName = 'privateBrowsingTestDB';
+            const storeName = 'testStore';
+
+            try {
+                const request = indexedDB.open(dbName, 1);
+
+                request.onupgradeneeded = (event) => {
+                    const db = event.target.result;
+                    if (!db.objectStoreNames.contains(storeName)) {
+                        db.createObjectStore(storeName, { keyPath: 'id' });
+                    }
+                };
+
+                request.onsuccess = (event) => {
+                    const db = event.target.result;
+                    try {
+                        const transaction = db.transaction([storeName], 'readwrite');
+                        const store = transaction.objectStore(storeName);
+                        const addRequest = store.add({ id: 'testId', data: 'testData' });
+
+                        addRequest.onsuccess = () => {
+                            updateResult('indexedDBResult', 'pass', 'IndexedDB works as expected. Data added.');
+                            db.close();
+                            indexedDB.deleteDatabase(dbName); // Clean up
+                        };
+
+                        addRequest.onerror = (e) => {
+                            updateResult('indexedDBResult', 'fail', `IndexedDB write failed: ${e.target.error.name} - ${e.target.error.message}. This is common in Private Browsing.`);
+                            db.close();
+                            indexedDB.deleteDatabase(dbName); // Clean up
+                        };
+                    } catch (e) {
+                        // Catch synchronous transaction errors
+                        updateResult('indexedDBResult', 'fail', `IndexedDB transaction failed: ${e.name} - ${e.message}. This is common in Private Browsing.`);
+                        db.close();
+                        indexedDB.deleteDatabase(dbName); // Clean up
+                    }
+                };
+
+                request.onerror = (event) => {
+                    updateResult('indexedDBResult', 'fail', `IndexedDB open failed: ${event.target.error.name} - ${event.target.error.message}. This is common in Private Browsing.`);
+                };
+            } catch (e) {
+                // Catch synchronous errors if indexedDB itself is not available or throws immediately
+                updateResult('indexedDBResult', 'fail', `IndexedDB access failed synchronously: ${e.name} - ${e.message}. This is common in Private Browsing.`);
+            }
+
+            // --- Check Cookie Support ---
+            // Cookies are generally supported in Private Browsing, but are cleared when the private window/tab is closed.
+            if (navigator.cookieEnabled) {
+                document.cookie = "testCookie=true; max-age=60; path=/"; // Set a cookie
+                if (document.cookie.includes("testCookie=true")) {
+                    updateResult('cookieResult', 'pass', 'Cookies are enabled and appear to be working.');
+                    document.cookie = "testCookie=; max-age=0; path=/"; // Clean up
+                } else {
+                    updateResult('cookieResult', 'fail', 'Cookies are reported as enabled but failed to set/retrieve.');
+                }
+            } else {
+                updateResult('cookieResult', 'fail', 'Cookies are reported as disabled.');
+            }
+        }
+
+        window.onload = runTests;
+    </script>
+</body>
+</html>
